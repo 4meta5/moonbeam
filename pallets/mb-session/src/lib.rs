@@ -27,7 +27,7 @@ use sp_runtime::transaction_validity::{
 };
 use sp_runtime::RuntimeDebug;
 use sp_std::prelude::*;
-use system::{
+use frame_system::{
 	self as system, ensure_none, ensure_signed,
 	offchain::{
 		AppCrypto, CreateSignedTransaction, SendUnsignedTransaction, SignedPayload, Signer,
@@ -36,15 +36,17 @@ use system::{
 
 use sp_core::crypto::KeyTypeId;
 
-#[path = "../../../runtime/src/constants.rs"]
-#[allow(dead_code)]
-mod constants;
-use constants::mb_genesis::VALIDATORS_PER_SESSION;
-use constants::time::EPOCH_DURATION_IN_BLOCKS;
+// #[path = "../../../runtime/src/constants.rs"]
+// #[allow(dead_code)]
+// mod constants;
+// use constants::mb_genesis::VALIDATORS_PER_SESSION;
+// use constants::time::EPOCH_DURATION_IN_BLOCKS;
 
+pub const VALIDATORS_PER_SESSION: u64 = 10;
+pub const EPOCH_DURATION_IN_BLOCKS: u32 = 10;
 pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"mbst");
 
-type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as system::Trait>::AccountId>>::Balance;
+type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
 pub mod crypto {
 	pub use super::KEY_TYPE;
@@ -57,7 +59,7 @@ pub mod crypto {
 	app_crypto!(sr25519, KEY_TYPE);
 
 	pub struct AuthId;
-	impl system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature>
+	impl frame_system::offchain::AppCrypto<<Sr25519Signature as Verify>::Signer, Sr25519Signature>
 		for AuthId
 	{
 		type RuntimeAppPublic = Public;
@@ -65,19 +67,19 @@ pub mod crypto {
 		type GenericPublic = sp_core::sr25519::Public;
 	}
 
-	impl system::offchain::AppCrypto<MultiSigner, MultiSignature> for AuthId {
+	impl frame_system::offchain::AppCrypto<MultiSigner, MultiSignature> for AuthId {
 		type RuntimeAppPublic = Public;
 		type GenericSignature = sp_core::sr25519::Signature;
 		type GenericPublic = sp_core::sr25519::Public;
 	}
 }
 
-pub trait Trait:
-	system::Trait + pallet_balances::Trait
-	+ pallet_session::Trait + CreateSignedTransaction<Call<Self>>
+pub trait Config:
+	frame_system::Config + pallet_balances::Config
+	+ pallet_session::Config + CreateSignedTransaction<Call<Self>>
 {
 	type AuthorityId: AppCrypto<Self::Public, Self::Signature>;
-	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+	type Event: From<Event<Self>> + Into<<Self as frame_system::Config>::Event>;
 	type Call: From<Call<Self>>;
 	type Currency: Currency<Self::AccountId>;
 	type SessionsPerEra: Get<u8>;
@@ -91,7 +93,7 @@ pub struct SnapshotsPayload<AccountId, Public, BlockNumber, BalanceOf> {
 	public: Public,
 }
 
-impl<T: Trait> SignedPayload<T>
+impl<T: Config> SignedPayload<T>
 	for SnapshotsPayload<T::AccountId, T::Public, T::BlockNumber, BalanceOf<T>>
 {
 	fn public(&self) -> T::Public {
@@ -106,14 +108,14 @@ pub struct ValidatorsPayload<AccountId, Public, BlockNumber> {
 	public: Public,
 }
 
-impl<T: Trait> SignedPayload<T> for ValidatorsPayload<T::AccountId, T::Public, T::BlockNumber> {
+impl<T: Config> SignedPayload<T> for ValidatorsPayload<T::AccountId, T::Public, T::BlockNumber> {
 	fn public(&self) -> T::Public {
 		self.public.clone()
 	}
 }
 
 decl_storage! {
-	trait Store for Module<T: Trait> as MoonbeamStakingModule {
+	trait Store for Module<T: Config> as MoonbeamStakingModule {
 		/// The number of Era.
 		EraIndex: u32;
 		/// The total validator pool.
@@ -169,7 +171,7 @@ decl_storage! {
 }
 
 decl_error! {
-	pub enum Error for Module<T: Trait> {
+	pub enum Error for Module<T: Config> {
 		AlreadyEndorsing,
 		NotEndorsing,
 	}
@@ -178,7 +180,7 @@ decl_error! {
 decl_event!(
 	pub enum Event<T>
 	where
-		AccountId = <T as system::Trait>::AccountId,
+		AccountId = <T as system::Config>::AccountId,
 	{
 		BlockAuthored(AccountId),
 		NewEra(u32),
@@ -189,7 +191,7 @@ decl_event!(
 );
 
 decl_module! {
-	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+	pub struct Module<T: Config> for enum Call where origin: T::Origin {
 
 		type Error = Error<T>;
 		fn deposit_event() = default;
@@ -209,11 +211,11 @@ decl_module! {
 			// Set One to Many validator->endorsers association.
 			<ValidatorEndorsers<T>>::append(&to,&from);
 			// Create a snapshot with the current free balance of the endorser.
-			Self::set_snapshot(&from,&to,T::Currency::free_balance(&from))?;
+			Self::set_snapshot(&from,&to,T::Currency::free_balance(&from));
 			Ok(())
 		}
 
-		/// Unndorsing dispatchable function
+		/// Unendorsing dispatchable function
 		#[weight = 0]
 		pub fn unendorse(
 			origin
@@ -275,14 +277,14 @@ decl_module! {
 			debug::native::info!("##### Offchain snapshots:");
 			debug::native::info!("> {:#?}",snapshots_payload.snapshots);
 			for s in &snapshots_payload.snapshots {
-				Self::set_snapshot(&s.0,&s.1,s.2)?;
+				Self::set_snapshot(&s.0,&s.1,s.2);
 			}
 			Ok(())
 		}
 	}
 }
 
-impl<T: Trait> Module<T> {
+impl<T: Config> Module<T> {
 	/// Offchain task to select validators
 	fn offchain_validator_selection(block_number: T::BlockNumber) -> Result<(), &'static str> {
 		// Find out where we are in Era
@@ -362,9 +364,8 @@ impl<T: Trait> Module<T> {
 		endorser: &T::AccountId,
 		validator: &T::AccountId,
 		amount: BalanceOf<T>,
-	) -> DispatchResult {
+	) {
 		<EndorserSnapshots<T>>::append(&endorser, &validator, (BlockOfEraIndex::get(), amount));
-		Ok(())
 	}
 	/// Calculates a single endorser weighted balance for the era by measuring the
 	/// block index distances.
@@ -482,7 +483,7 @@ impl<T: Trait> Module<T> {
 }
 
 pub struct SessionManager<T>(T);
-impl<T: Trait> pallet_session::SessionManager<T::AccountId> for SessionManager<T> {
+impl<T: Config> pallet_session::SessionManager<T::AccountId> for SessionManager<T> {
 	fn new_session(new_index: u32) -> Option<Vec<T::AccountId>> {
 		<Module<T>>::deposit_event(RawEvent::NewSession(new_index));
 
@@ -526,7 +527,7 @@ impl<T: Trait> pallet_session::SessionManager<T::AccountId> for SessionManager<T
 }
 
 pub struct AuthorshipEventHandler<T>(T);
-impl<T: Trait> pallet_authorship::EventHandler<T::AccountId, u32> for AuthorshipEventHandler<T> {
+impl<T: Config> pallet_authorship::EventHandler<T::AccountId, u32> for AuthorshipEventHandler<T> {
 	fn note_author(author: T::AccountId) {
 		let authored_blocks = <SessionValidatorAuthoring<T>>::get(&author)
 			.checked_add(1)
@@ -542,7 +543,7 @@ impl<T: Trait> pallet_authorship::EventHandler<T::AccountId, u32> for Authorship
 }
 
 #[allow(deprecated)] // ValidateUnsigned
-impl<T: Trait> frame_support::unsigned::ValidateUnsigned for Module<T> {
+impl<T: Config> frame_support::unsigned::ValidateUnsigned for Module<T> {
 	type Call = Call<T>;
 	fn validate_unsigned(_source: TransactionSource, call: &Self::Call) -> TransactionValidity {
 		if let Call::persist_selected_validators(ref payload, ref signature) = call {
